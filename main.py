@@ -131,7 +131,7 @@ def fetch_hh_vac(url: str, page: int) -> Optional[Dict[str, Any]]:
             logger.error(f"Ошибка HTTP {response.status_code} для страницы {page}")
             return None
         
-        logger.info(f"Вакансии успешно со страницы {page} получены!")
+        logger.info(f"Вакансии успешно со страницы {page+1} получены!")
         return response.json()
         
     except requests.exceptions.Timeout:
