@@ -5,14 +5,55 @@ from typing import List, Dict, Any, Optional
 import logging
 from pathlib import Path
 from functools import wraps
+from dataclasses import dataclass, asdict
+from datetime import datetime
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# HH API Vacancies URL
+# HH API URL
 url = "https://api.hh.ru/vacancies"
 
+# Датакласс для хранения структурированных данных по вакансиям
+@dataclass
+class VacancyData:
+    title: str
+    url: str
+    salary_from: Optional[int]
+    salary_to: Optional[int]
+    salary_currency: Optional[str]
+    salary_gross: Optional[bool]
+    retrieved_at: str
+
+    # Создаем экземпляр VacancyData из ответа API HH
+    @classmethod
+    def api_response(cls, vacancy_data: Dict[str, Any]) -> Optional['VacancyData']:
+        try:
+            title = vacancy_data.get('name','')
+            url = vacancy_data.get('alternate_url', '')
+            
+            salary_info = vacancy_data.get('salary')
+            salary_from = salary_info.get('from') if salary_info else None
+            salary_to = salary_info.get('to') if salary_info else None
+            salary_currency = salary_info.get('currency') if salary_info else None
+            salary_gross = salary_info.get('gross') if salary_info else None
+
+            retrieved_at = datetime.now().isoformat()
+
+            return cls(
+                title = title,
+                url = url,
+                salary_from = salary_from,
+                salary_to = salary_to,
+                salary_currency = salary_currency,
+                salary_gross = salary_gross,
+                retrieved_at = retrieved_at
+            )
+
+        except Exception as e:
+            logger.error(f"Ошибка при создании VacancyData: {e}")
+            return None
 
 # Выполнения запросов с повторениям с использования декоратора
 def retry_request(
@@ -104,25 +145,32 @@ def fetch_hh_vac(url: str, page: int) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Извлечение и преобразование данных о вакансиях в структурированный формат
+def extract_vacancy_data(vacancies: List[Dict[str, Any]]) -> List[VacancyData]:
+    structured_data = []
+
+    for vacancy in vacancies:
+        vacancy_data = VacancyData.api_response(vacancy)
+        if vacancy_data:
+            structured_data.append(vacancy_data)
+    
+    return structured_data
+
+
 # Функция фильтрации вакансии по мин. зарплате
 def filter_by_salary(vacancies: List[Dict[str, Any]], min_salary: int) -> List[Dict[str, Any]]:
 
     filtered = []
     for vacancy in vacancies:
-        salary = vacancy.get('salary')
-        if salary:
-            # Проверяем обе границы зарплаты (from и to)
-            salary_from = salary.get('from')
-            salary_to = salary.get('to')
-            
-            if (salary_from and salary_from >= min_salary) or \
-               (salary_to and salary_to >= min_salary):
-                filtered.append(vacancy)
+        # Проверяем обе границы зарплаты (from и to)
+        if (vacancy.salary_from and vacancy.salary_from >= min_salary) or \
+           (vacancy.salary_to and vacancy.salary_to >= min_salary):
+            filtered.append(vacancy)
     
     return filtered
 
 # Запрос всех вакансий с фильтром по зарплате
-def fetch_all(url: str, min_salary: int = 250000) -> List[Dict[str, Any]]:
+def fetch_all(url: str, min_salary: int = 250000) -> List[VacancyData]:
     
     page = 0
     all_vacancies = []
@@ -139,8 +187,11 @@ def fetch_all(url: str, min_salary: int = 250000) -> List[Dict[str, Any]]:
             logger.warning(f"Отсутствует ключ 'items' в ответе для страницы {page}")
             break
 
+        # Структурируем данные 
+        structured_vacancies = extract_vacancy_data(current_vacancies)
+        
         # Фильтруем по зарплате
-        filtered_vacancies = filter_by_salary(current_vacancies, min_salary)
+        filtered_vacancies = filter_by_salary(structured_vacancies, min_salary)
         all_vacancies.extend(filtered_vacancies)
 
         # Проверяем, есть ли следующая страница
@@ -160,8 +211,11 @@ def save_to_file(vacancies: List[Dict[str, Any]], filename: str = "./data/vacanc
         # Создаём директорию, если она не существует
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
         
+        # Преобразуем датаклассы в словари 
+        vacancies_dict = [asdict(vacancy) for vacancy in vacancies]
+
         with open(filename, "w", encoding="utf-8") as file:
-            json.dump(vacancies, file, ensure_ascii=False, indent=2)
+            json.dump(vacancies_dict, file, ensure_ascii=False, indent=2)
         
         logging.info(f"Данные успешно сохранены в {filename}")
     
@@ -170,14 +224,20 @@ def save_to_file(vacancies: List[Dict[str, Any]], filename: str = "./data/vacanc
     except Exception as e:
         logger.error(f"Неожиданная ошибка при сохранении: {e}")
 
+
 # Основная функция сбора данных по вакансиям
 def main():
     logger.info("Начинаем сбор вакансий...")
     
-    vacancies = fetch_all(url, min_salary=250000)
+    vacancies = fetch_all(url, min_salary=250000) # Запрос вакансий от 250 000 р.
     
     if vacancies:
         logger.info(f"Найдено {len(vacancies)} вакансий с зарплатой от 250000 руб.")
+
+        # Пять вакансий выводим в качестве демонстрации
+        for i, vacancy in enumerate(vacancies[:5]):
+            logger.info(f"Пример {i+1}: {vacancy.title}: {vacancy.salary_from}-{vacancy.salary_to} {vacancy.salary_currency}")
+
         save_to_file(vacancies)
     else:
         logger.warning("Не удалось получить вакансии или подходящие вакансии не найдены.")
